@@ -4,10 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d77ecc5d-7cca-4c83-bb7a-5be2a60594fe" name="Changes" comment="Dataset">
-      <change beforePath="$PROJECT_DIR$/Analysis_last_mile.py" beforeDir="false" afterPath="$PROJECT_DIR$/Analysis_last_mile.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Dataset.py" beforeDir="false" afterPath="$PROJECT_DIR$/Dataset.py" afterDir="false" />
-    </list>
+    <list default="true" id="d77ecc5d-7cca-4c83-bb7a-5be2a60594fe" name="Changes" comment="Dataset" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -23,7 +20,7 @@
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
-        <entry key="$PROJECT_DIR$" value="main" />
+        <entry key="$PROJECT_DIR$" value="2.0" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -58,7 +55,7 @@
     "RunOnceActivity.git.unshallow": "true",
     "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultAutoModeForALLUsers.v1": "true",
     "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "2.0",
+    "git-widget-placeholder": "main",
     "junie.onboarding.icon.badge.shown": "true",
     "settings.editor.selected.configurable": "vcs.Git",
     "to.speed.mode.migration.done": "true"
