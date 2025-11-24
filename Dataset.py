@@ -1,158 +1,235 @@
-# =====================
-# Imports & Global Config
-# =====================
+# dataset.py
 from pathlib import Path
+from typing import Optional
+import shutil
 import pandas as pd
+from sklearn.model_selection import train_test_split
 import kagglehub
 
-DATASET_ID = "sujalsuthar/amazon-delivery-dataset"
+# Local dataset location
+DATA_DIR = Path("data")
+CSV_NAME = "amazon_delivery_dataset.csv"
+DATA_PATH = DATA_DIR / CSV_NAME
 
-# =====================
-# Step 1 — Download dataset (cached)
-# =====================
-def step1_download(dataset_id: str) -> Path:
-    data_dir = Path(kagglehub.dataset_download(dataset_id))
-    print("Dataset folder:", data_dir)
-    return data_dir
 
-# =====================
-# Step 2 — Locate a tabular file (CSV preferred, else Parquet)
-# =====================
-def step2_locate_tabular_file(data_dir: Path) -> Path:
-    candidates = list(data_dir.rglob("*.csv")) + list(data_dir.rglob("*.parquet"))
-    if not candidates:
-        raise FileNotFoundError(f"No CSV/Parquet files found in {data_dir}")
-    data_path = next((p for p in candidates if p.suffix == ".csv"), candidates[0])
-    print("Using file:", data_path.name)
-    return data_path
+# -----------------------------------------------------------
+# Download dataset using kagglehub
+# -----------------------------------------------------------
+def download_with_kagglehub() -> Path:
+    """
+    Download the Amazon delivery dataset using kagglehub and
+    copy a CSV file into data/amazon_delivery_dataset.csv.
 
-# =====================
-# Step 3 — Load into pandas
-# =====================
-def step3_load_dataframe(data_path: Path) -> pd.DataFrame:
-    if data_path.suffix == ".csv":
-        df = pd.read_csv(data_path)
-    else:
-        df = pd.read_parquet(data_path)
+    Returns:
+        Path to the local CSV file (DATA_PATH).
+    """
+    print("Downloading dataset with kagglehub...")
+    download_path = Path(
+        kagglehub.dataset_download("sujalsuthar/amazon-delivery-dataset")
+    )
+    print("Path to dataset files:", download_path)
+
+    DATA_DIR.mkdir(exist_ok=True, parents=True)
+
+    # Find a CSV file in the downloaded path
+    csv_files = list(download_path.glob("*.csv"))
+    if not csv_files:
+        raise FileNotFoundError(
+            f"No CSV files found in {download_path}. "
+            "Check the dataset contents."
+        )
+
+    # Use the first CSV file found
+    source_csv = csv_files[0]
+    shutil.copy(source_csv, DATA_PATH)
+    print(f"Copied {source_csv.name} to {DATA_PATH}")
+
+    return DATA_PATH
+
+
+# -----------------------------------------------------------
+# Loading and feature engineering
+# -----------------------------------------------------------
+def load_raw_data(path: Path = DATA_PATH) -> pd.DataFrame:
+    """
+    Load the raw CSV into a pandas DataFrame.
+    If the file doesn't exist, download it with kagglehub first.
+    """
+    if not path.exists():
+        download_with_kagglehub()
+
+    df = pd.read_csv(path)
     return df
 
-# =====================
-# Step 4 — Show first few rows
-# =====================
-def step4_show_head(df: pd.DataFrame, n: int = 5) -> None:
-    print(f"\nFirst {n} rows:")
-    print(df.head(n))
 
-# =====================
-# Step 5 — Count rows with ANY nulls
-# =====================
-def step5_count_rows_with_null(df: pd.DataFrame) -> int:
-    rows_with_any_null = int((df.isna().sum(axis=1) > 0).sum())
-    print(f"\nTotal rows with ≥1 null value: {rows_with_any_null} out of {len(df)}")
-    return rows_with_any_null
+def build_features(df: pd.DataFrame):
+    """
+    Turn the raw DataFrame into:
+      - X : feature matrix
+      - y : target (delivery time)
+      - coords : latitude/longitude columns for routing
+    """
+    df = df.copy()
 
-# =====================
-# Step 6 — Count rows where |latitude| <= tol OR |longitude| <= tol
-# =====================
-def step6_count_zero_lat_lon(df: pd.DataFrame, tol: float = 1e-6) -> None:
-    # --- Try common lat/lon column names (case-insensitive) ---
-    lat_candidates = ["latitude", "lat", "pickup_latitude", "dropoff_latitude"]
-    lon_candidates = ["longitude", "lon", "lng", "pickup_longitude", "dropoff_longitude"]
+    # -------- 1. Target variable ---------------------------------
+    target_col = "Delivery_Time"  # adjust if different in your CSV
 
-    def find_col(cands):
-        # exact (case-insensitive) first, else substring match as fallback
-        cols_lower = {c.lower(): c for c in df.columns}
-        for c in cands:
-            if c in cols_lower:
-                return cols_lower[c]
-        for c in df.columns:
-            cl = c.lower()
-            if any(k in cl for k in cands):
-                return c
-        return None
+    if target_col not in df.columns:
+        raise KeyError(
+            f"Expected target column '{target_col}' not found. "
+            "Check the CSV columns and update target_col."
+        )
 
-    lat_col = find_col(lat_candidates)
-    lon_col = find_col(lon_candidates)
+    df = df.dropna(subset=[target_col])
 
-    if not lat_col or not lon_col:
-        print("\nLatitude/Longitude columns not found — skipping zero coordinate count.")
-        print("Detected columns:", list(df.columns))
-        return
+    # -------- 2. Define numeric and categorical columns ----------
+    numeric_cols = [
+        "Agent_Age",
+        "Agent_Rating",
+        "Distance",      # example, adjust to actual name
+    ]
 
-    # --- Safely coerce to numeric for comparison ---
-    lat = pd.to_numeric(df[lat_col], errors="coerce")
-    lon = pd.to_numeric(df[lon_col], errors="coerce")
+    categorical_cols = [
+        "Weather",
+        "Traffic",
+        "Vehicle",
+        "Area",
+        "Category",
+    ]
 
-    # --- Use tolerance for near-zero values ---
-    lat_near_zero = lat.abs() <= tol
-    lon_near_zero = lon.abs() <= tol
-    either_near_zero = lat_near_zero | lon_near_zero
+    numeric_cols = [c for c in numeric_cols if c in df.columns]
+    categorical_cols = [c for c in categorical_cols if c in df.columns]
 
-    print(f"\nNear-zero coordinate checks with tol={tol} using: lat='{lat_col}', lon='{lon_col}'")
-    print(f"Rows with |latitude| <= {tol}: {int(lat_near_zero.sum())}")
-    print(f"Rows with |longitude| <= {tol}: {int(lon_near_zero.sum())}")
-    print(f"Rows where either |lat|<=tol OR |lon|<=tol: {int(either_near_zero.sum())}")
+    # -------- 3. Handle missing values ---------------------------
+    # Your requirement: drop rows with missing categorical values
+    if categorical_cols:
+        df = df.dropna(subset=categorical_cols)
 
-# =====================
-# Step 7 — Data cleaning:
-# Drop rows with ANY nulls; then drop rows where latitude==0.0 OR longitude==0.0 (strict)
-# =====================
-def step7_clean_data(df: pd.DataFrame) -> pd.DataFrame:
-    original = len(df)
+    # Numeric: fill with median
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = df[col].fillna(df[col].median())
 
-    # Drop any nulls
-    df_no_nulls = df.dropna()
-    after_nulls = len(df_no_nulls)
+    # -------- 4. Time-of-day features ----------------------------
+    def extract_hour(col_name: str):
+        if col_name not in df.columns:
+            return None
+        col = df[col_name].fillna("12:00").astype(str)
+        return col.str.slice(0, 2).astype(int)
 
-    # Detect lat/lon columns (same logic as Step 6)
-    lat_candidates = ["latitude", "lat", "pickup_latitude", "dropoff_latitude"]
-    lon_candidates = ["longitude", "lon", "lng", "pickup_longitude", "dropoff_longitude"]
+    order_hour = extract_hour("Order_Time")
+    if order_hour is not None:
+        df["Order_Hour"] = order_hour
 
-    def find_col(cands):
-        cols_lower = {c.lower(): c for c in df_no_nulls.columns}
-        for c in cands:
-            if c in cols_lower:
-                return cols_lower[c]
-        for c in df_no_nulls.columns:
-            cl = c.lower()
-            if any(k in cl for k in cands):
-                return c
-        return None
+    pickup_hour = extract_hour("Pickup_Time")
+    if pickup_hour is not None:
+        df["Pickup_Hour"] = pickup_hour
 
-    lat_col = find_col(lat_candidates)
-    lon_col = find_col(lon_candidates)
+    hour_cols = [c for c in ["Order_Hour", "Pickup_Hour"] if c in df.columns]
 
-    if not lat_col or not lon_col:
-        print("\n[Clean] Lat/Lon columns not found — only null rows removed.")
-        print(f"Rows: {original} -> {after_nulls} (removed {original - after_nulls})")
-        return df_no_nulls
+    # -------- 5. Latitude / longitude features -------------------
+    latlon_cols = [
+        c
+        for c in [
+            "Restaurant_latitude",
+            "Restaurant_longitude",
+            "Delivery_location_latitude",
+            "Delivery_location_longitude",
+        ]
+        if c in df.columns
+    ]
 
-    # Coerce to numeric and filter strict zeros
-    lat = pd.to_numeric(df_no_nulls[lat_col], errors="coerce")
-    lon = pd.to_numeric(df_no_nulls[lon_col], errors="coerce")
+    coords = df[latlon_cols].copy() if latlon_cols else None
 
-    mask_nonzero = (lat != 0.0) & (lon != 0.0)  # strict equality to zero
-    cleaned_df = df_no_nulls[mask_nonzero].copy()
+    # -------- 6. Final feature matrix X --------------------------
+    feature_cols = numeric_cols + hour_cols + categorical_cols + latlon_cols
+    if not feature_cols:
+        raise ValueError("No feature columns found. Check your column lists.")
 
-    print(f"\n[Clean] Strict zero filtering on '{lat_col}', '{lon_col}'")
-    print(f"Rows: {original} -> {after_nulls} after dropna -> {len(cleaned_df)} after zero-filter")
-    print(f"Removed due to nulls: {original - after_nulls}")
-    print(f"Removed due to zero lat/lon: {after_nulls - len(cleaned_df)}")
-    return cleaned_df
+    X = df[feature_cols]
 
-# =====================
-# Orchestration
-# =====================
-def main():
-    data_dir = step1_download(DATASET_ID)
-    data_path = step2_locate_tabular_file(data_dir)
-    df = step3_load_dataframe(data_path)
-    step4_show_head(df, n=5)
-    step5_count_rows_with_null(df)
-    step6_count_zero_lat_lon(df, tol=1e-6)  # diagnostic with tolerance
-    cleaned = step7_clean_data(df)          # strict cleaning
-    # (Optional) show size of cleaned data
-    print(f"\nCleaned DataFrame shape: {cleaned.shape}")
+    if categorical_cols:
+        X = pd.get_dummies(X, columns=categorical_cols, drop_first=True)
 
+    y = df[target_col]
+
+    return X, y, coords
+
+
+# -----------------------------------------------------------
+# Train/test split helper
+# -----------------------------------------------------------
+def get_train_test_data(
+    test_size: float = 0.3,
+    random_state: int = 42,
+    area_filter: Optional[str] = None,
+):
+    """
+    Return train/test splits for a given area (e.g. 'Urban').
+
+    Returns:
+      X_train, X_test, y_train, y_test, coords_train, coords_test
+    """
+    df = load_raw_data()
+
+    if area_filter is not None and "Area" in df.columns:
+        df = df[df["Area"] == area_filter].copy()
+
+    X, y, coords = build_features(df)
+
+    if coords is None:
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=random_state
+        )
+        coords_train = coords_test = None
+    else:
+        X_train, X_test, y_train, y_test, coords_train, coords_test = train_test_split(
+            X, y, coords, test_size=test_size, random_state=random_state
+        )
+
+    return X_train, X_test, y_train, y_test, coords_train, coords_test
+
+# -----------------------------------------------------------
 if __name__ == "__main__":
-    main()
+    print("[__main__] Running dataset.py for a quick data check")
+
+    # 1. Load raw data (downloads automatically if missing)
+    df_raw = load_raw_data()
+    print("\n[__main__] Raw data columns:")
+    print(df_raw.columns)
+    print("\n[__main__] Raw data (first 5 rows):")
+    print(df_raw.head())
+
+    # 2. Build features and inspect heads
+    X, y, coords = build_features(df_raw)
+    print(f"\n[__main__] Feature matrix X shape: {X.shape}")
+    print(f"[__main__] Target y shape: {y.shape}")
+    print("\n[__main__] Feature matrix X (first 5 rows):")
+    print(X.head())
+    print("\n[__main__] Target y (first 5 values):")
+    print(y.head())
+
+    if coords is not None:
+        print(f"\n[__main__] Coords shape: {coords.shape}")
+        print("[__main__] Coords (first 5 rows):")
+        print(coords.head())
+
+    # 3. Train/test split and inspect training data
+    (
+        X_train,
+        X_test,
+        y_train,
+        y_test,
+        coords_train,
+        coords_test,
+    ) = get_train_test_data()
+
+    print(f"\n[__main__] X_train shape: {X_train.shape}")
+    print(f"[__main__] X_test shape:  {X_test.shape}")
+    print(f"[__main__] y_train shape: {y_train.shape}")
+    print(f"[__main__] y_test shape:  {y_test.shape}")
+
+    print("\n[__main__] X_train (first 5 rows):")
+    print(X_train.head())
+    print("\n[__main__] y_train (first 5 values):")
+    print(y_train.head())
