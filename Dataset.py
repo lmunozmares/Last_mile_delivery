@@ -1,4 +1,3 @@
-# dataset.py
 from pathlib import Path
 from typing import Optional
 import shutil
@@ -241,3 +240,6 @@ if __name__ == "__main__":
     print(X_train.head())
     print("\n[__main__] y_train (first 5 values):")
     print(y_train.head())
+    print("\nUnique values in Area column (if it exists):")
+    if "Area" in df_raw.columns:
+        print(df_raw["Area"].unique())
