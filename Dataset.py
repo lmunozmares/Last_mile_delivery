@@ -101,14 +101,14 @@ def build_features(df: pd.DataFrame):
     categorical_cols = [c for c in categorical_cols if c in df.columns]
 
     # -------- 3. Handle missing values ---------------------------
-    # Your requirement: drop rows with missing categorical values
+    # Drop rows with missing categorical values
     if categorical_cols:
         df = df.dropna(subset=categorical_cols)
 
-    # Numeric: fill with median
+    # Numeric: fill with mean
     for col in numeric_cols:
         if col in df.columns:
-            df[col] = df[col].fillna(df[col].median())
+            df[col] = df[col].fillna(df[col].mean())
 
     # -------- 4. Time-of-day features ----------------------------
     def extract_hour(col_name: str):
@@ -214,7 +214,15 @@ if __name__ == "__main__":
         print("[__main__] Coords (first 5 rows):")
         print(coords.head())
 
-    # 3. Train/test split and inspect training data
+    # 3. Scan for missing values in processed data
+    print("\n[__main__] Missing values in processed feature matrix X:")
+    print(X.isnull().sum()[X.isnull().sum() > 0])  # only show columns with missing
+
+    if coords is not None:
+        print("\n[__main__] Missing values in coords dataframe:")
+        print(coords.isnull().sum()[coords.isnull().sum() > 0])
+
+    # 4. Train/test split and inspect training data
     (
         X_train,
         X_test,
