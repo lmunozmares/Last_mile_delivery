@@ -14,7 +14,7 @@ from Dataset import get_train_test_data
 # -----------------------------------------------------------
 # 1. Train the prediction model
 # -----------------------------------------------------------
-def train_model(area: str = "Urban"):
+def train_model(area: str = None ):
     """
     Train a Random Forest model to predict delivery time for a given area.
 
@@ -280,7 +280,7 @@ def compare_routes_with_osm(coords_sample, city_name: str):
 # -----------------------------------------------------------
 def main():
     # 1. Train model on one area (your "city")
-    area = "Urban "  # adjust to match Area value in your dataset
+    area = "Metropolitian"  # adjust to match Area value in your dataset
     model, X_test, y_test, coords_test = train_model(area=area)
 
     # 2. Simulate 50 deliveries and compute time/fuel improvement

@@ -159,7 +159,7 @@ def build_features(df: pd.DataFrame):
 # Train/test split helper
 # -----------------------------------------------------------
 def get_train_test_data(
-    test_size: float = 0.3,
+    test_size: float = 0.3,  # 70% train / 30% test if you want
     random_state: int = 42,
     area_filter: Optional[str] = None,
 ):
@@ -170,19 +170,53 @@ def get_train_test_data(
       X_train, X_test, y_train, y_test, coords_train, coords_test
     """
     df = load_raw_data()
+    print(f"\n[get_train_test_data] Raw rows before filtering: {len(df)}")
 
+    # Strip spaces from Area values so "Urban " becomes "Urban"
+    if "Area" in df.columns:
+        df["Area"] = df["Area"].astype(str).str.strip()
+
+    # Optional: filter by area
     if area_filter is not None and "Area" in df.columns:
-        df = df[df["Area"] == area_filter].copy()
+        df_area = df[df["Area"] == area_filter].copy()
+        print(
+            f"[get_train_test_data] Rows after Area == '{area_filter}': {len(df_area)}"
+        )
 
+        # If filter removes everything, fall back to using all rows
+        if len(df_area) == 0:
+            print(
+                f"[get_train_test_data] WARNING: no rows found for Area='{area_filter}'. "
+                "Falling back to all areas."
+            )
+        else:
+            df = df_area
+
+    # Build features
     X, y, coords = build_features(df)
+    print(f"[get_train_test_data] Rows after build_features: {len(X)}")
 
+    if len(X) == 0:
+        raise ValueError(
+            "[get_train_test_data] No rows left after preprocessing. "
+            "Check your filters and dropna logic."
+        )
+
+    # Train/test split (with coords if available)
     if coords is None:
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state
         )
         coords_train = coords_test = None
     else:
-        X_train, X_test, y_train, y_test, coords_train, coords_test = train_test_split(
+        (
+            X_train,
+            X_test,
+            y_train,
+            y_test,
+            coords_train,
+            coords_test,
+        ) = train_test_split(
             X, y, coords, test_size=test_size, random_state=random_state
         )
 
