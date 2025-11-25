@@ -4,8 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d77ecc5d-7cca-4c83-bb7a-5be2a60594fe" name="Changes" comment="Dataset">
-      <change afterPath="$PROJECT_DIR$/data/amazon_delivery_dataset.csv" afterDir="false" />
+    <list default="true" id="d77ecc5d-7cca-4c83-bb7a-5be2a60594fe" name="Changes" comment="First working Model">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Analysis_last_mile.py" beforeDir="false" afterPath="$PROJECT_DIR$/Analysis_last_mile.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Dataset.py" beforeDir="false" afterPath="$PROJECT_DIR$/Dataset.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/data/amazon_delivery_dataset.csv" beforeDir="false" afterPath="$PROJECT_DIR$/data/amazon_delivery_dataset.csv" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -39,12 +42,22 @@
     &quot;assignee&quot;: &quot;lmunozmares&quot;
   }
 }</component>
-  <component name="GithubPullRequestsUISettings">{
-  &quot;selectedUrlAndAccountId&quot;: {
-    &quot;url&quot;: &quot;https://github.com/lmunozmares/Last_mile_delivery.git&quot;,
-    &quot;accountId&quot;: &quot;7995501c-4bf0-4ccf-a5fc-dff57ae33dfc&quot;
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/lmunozmares/Last_mile_delivery.git",
+    "accountId": "7995501c-4bf0-4ccf-a5fc-dff57ae33dfc"
+  },
+  "recentNewPullRequestHead": {
+    "server": {
+      "useHttp": false,
+      "host": "github.com",
+      "port": null,
+      "suffix": null
+    },
+    "owner": "lmunozmares",
+    "repository": "Last_mile_delivery"
   }
-}</component>
+}]]></component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 5
 }</component>
@@ -116,7 +129,15 @@
       <option name="project" value="LOCAL" />
       <updated>1763982619519</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="First working Model">
+      <option name="closed" value="true" />
+      <created>1763987622550</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1763987622550</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">

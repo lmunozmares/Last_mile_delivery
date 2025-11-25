@@ -1,54 +1,71 @@
-# analysis_last_mile.py
+# Analysis_last_mile.py
 
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error
+from sklearn.metrics import mean_absolute_error, r2_score
 
+from Dataset import get_train_test_data  # matches Dataset.py (capital D)
+
+import osmnx as ox
 import networkx as nx
-import osmnx as ox  # uses OpenStreetMap for routing
-
-from Dataset import get_train_test_data
 
 
 # -----------------------------------------------------------
 # 1. Train the prediction model
 # -----------------------------------------------------------
-def train_model(area: str = None ):
+def train_model(area: str | None = "Metropolitan"):
     """
-    Train a Random Forest model to predict delivery time for a given area.
+    Train a Random Forest model to predict delivery time.
 
+    If area is not None, Dataset.get_train_test_data will try to filter by Area.
     Returns:
-      model, X_test, y_test, coords_test
+      model, X_test, y_test, coords_test, baseline_mae, rf_mae
     """
-    (
-        X_train,
-        X_test,
-        y_train,
-        y_test,
-        coords_train,
-        coords_test,
-    ) = get_train_test_data(area_filter=area)
+    if area is None:
+        X_train, X_test, y_train, y_test, coords_train, coords_test = get_train_test_data()
+        print("\n[train_model] Using ALL areas (no area_filter).")
+    else:
+        (
+            X_train,
+            X_test,
+            y_train,
+            y_test,
+            coords_train,
+            coords_test,
+        ) = get_train_test_data(area_filter=area)
+        print(f"\n[train_model] Using only Area == '{area}' when possible.")
 
     model = RandomForestRegressor(
-        n_estimators=200,
-        random_state=42,  # fixed seed for reproducibility
+        n_estimators=400,
+        max_depth=15,
+        min_samples_leaf=3,
+        random_state=42,
         n_jobs=-1,
     )
 
     model.fit(X_train, y_train)
 
-    # Evaluation on the test set
+    # RF predictions
     y_pred = model.predict(X_test)
-    mae = mean_absolute_error(y_test, y_pred)
-    print(f"\n[train_model] Test MAE for area={area}: {mae:.2f} minutes")
+    rf_mae = mean_absolute_error(y_test, y_pred)
+    rf_r2 = r2_score(y_test, y_pred)
 
-    # Show a small sample of predictions vs actual
+    # Naive baseline: always predict mean of y_train
+    baseline_pred = np.full_like(y_test, fill_value=y_train.mean(), dtype=float)
+    baseline_mae = mean_absolute_error(y_test, baseline_pred)
+    baseline_r2 = r2_score(y_test, baseline_pred)
+
+    print(f"\n[train_model] Test MAE (RF):       {rf_mae:.2f} minutes")
+    print(f"[train_model] Test R² (RF):        {rf_r2:.3f}")
+    print(f"[train_model] Baseline MAE (mean): {baseline_mae:.2f} minutes")
+    print(f"[train_model] Baseline R² (mean):  {baseline_r2:.3f}")
+
     print("\n[train_model] Sample predictions vs actual (first 5):")
     for yp, yt in list(zip(y_pred, y_test))[:5]:
         print(f"  predicted={yp:.1f}  |  actual={yt:.1f}")
 
-    return model, X_test, y_test, coords_test
+    return model, X_test, y_test, coords_test, baseline_mae, rf_mae
 
 
 # -----------------------------------------------------------
@@ -90,6 +107,8 @@ def simulate_50_deliveries(model, X_test, y_test, coords_test, random_state: int
 
     improvement_pct = (
         (baseline_avg_time - optimized_avg_time) / baseline_avg_time * 100
+        if baseline_avg_time > 0
+        else 0.0
     )
 
     results = {
@@ -134,14 +153,58 @@ def plot_dashboard(results):
 
 
 # -----------------------------------------------------------
-# 4. OpenStreetMap route optimization
+# 4. Region selection + OSM routing
 # -----------------------------------------------------------
-def build_osm_graph(city_name: str):
+def pick_main_region(coords_df, precision: int = 2):
     """
-    Download the drivable road network for a city from OpenStreetMap.
+    Pick the geographic 'region' with the most points, based on rounded store coordinates.
+
+    precision=2 means rounding to 0.01 degree (~1 km).
+    Returns (center_lat, center_lon) for the densest region.
     """
-    print(f"\n[OSM] Downloading road network for {city_name} from OpenStreetMap...")
-    G = ox.graph_from_place(city_name, network_type="drive")
+    if coords_df is None or coords_df.empty:
+        raise ValueError("coords_df is empty; cannot pick a main region.")
+
+    lat_col = "Store_Latitude"
+    lon_col = "Store_Longitude"
+    if lat_col not in coords_df.columns or lon_col not in coords_df.columns:
+        raise KeyError("Store_Latitude / Store_Longitude not found in coords_df.")
+
+    rounded = coords_df[[lat_col, lon_col]].round(precision)
+
+    counts = (
+        rounded
+        .value_counts()
+        .reset_index(name="count")
+        .sort_values("count", ascending=False)
+    )
+
+    top = counts.iloc[0]
+    center_lat = top[lat_col]
+    center_lon = top[lon_col]
+    print(
+        f"\n[region] Densest region center (rounded): "
+        f"lat={center_lat}, lon={center_lon}, count={top['count']}"
+    )
+    return float(center_lat), float(center_lon)
+
+
+def build_osm_graph(center_lat: float, center_lon: float, dist: int = 5000):
+    """
+    Download the drivable road network around a point from OpenStreetMap.
+
+    center_lat, center_lon: center of the region (degrees).
+    dist: radius in meters (default 5 km).
+    """
+    print(
+        f"\n[OSM] Downloading road network around "
+        f"lat={center_lat}, lon={center_lon}, dist={dist}m ..."
+    )
+    G = ox.graph_from_point(
+        (center_lat, center_lon),
+        dist=dist,
+        network_type="drive",
+    )
     # Add speed (km/h) and travel_time (seconds) estimates to edges
     G = ox.add_edge_speeds(G)
     G = ox.add_edge_travel_times(G)
@@ -151,11 +214,11 @@ def build_osm_graph(city_name: str):
 def coords_to_nodes(G, coords_df):
     """
     Map each delivery's latitude/longitude to the nearest OSM street node.
-    Requires 'Delivery_location_latitude' and 'Delivery_location_longitude'.
+    Uses Drop_Latitude and Drop_Longitude from the Kaggle dataset.
     """
     required_cols = [
-        "Delivery_location_latitude",
-        "Delivery_location_longitude",
+        "Drop_Latitude",
+        "Drop_Longitude",
     ]
     for c in required_cols:
         if c not in coords_df.columns:
@@ -164,8 +227,8 @@ def coords_to_nodes(G, coords_df):
                 "Check your CSV and update column names."
             )
 
-    lats = coords_df["Delivery_location_latitude"].values
-    lons = coords_df["Delivery_location_longitude"].values
+    lats = coords_df["Drop_Latitude"].values
+    lons = coords_df["Drop_Longitude"].values
 
     # OSMnx helper: find nearest street nodes for each lat/lon pair
     nodes = ox.distance.nearest_nodes(G, X=lons, Y=lats)
@@ -176,17 +239,34 @@ def route_distance_and_time(G, node_order):
     """
     Compute total route distance (meters) and time (seconds)
     for a sequence of nodes, using OSM shortest paths.
+
+    Uses an undirected view of the graph and skips legs with no path.
     """
+    Gu = G.to_undirected()
+
     total_len = 0.0
     total_time = 0.0
 
     for u, v in zip(node_order[:-1], node_order[1:]):
-        path = nx.shortest_path(G, u, v, weight="travel_time")
-        edge_attrs = ox.utils_graph.get_route_edge_attributes(
-            G, path, ["length", "travel_time"]
-        )
-        total_len += sum(e["length"] for e in edge_attrs)
-        total_time += sum(e["travel_time"] for e in edge_attrs)
+        try:
+            path = nx.shortest_path(Gu, u, v, weight="travel_time")
+        except nx.NetworkXNoPath:
+            # skip unreachable leg
+            continue
+
+        for n1, n2 in zip(path[:-1], path[1:]):
+            edge_data = Gu[n1][n2]
+            # edge_data may be a dict of edges (MultiGraph) or a single dict
+            if isinstance(edge_data, dict):
+                best_edge_data = min(
+                    edge_data.values(),
+                    key=lambda d: d.get("travel_time", float("inf")),
+                )
+            else:
+                best_edge_data = edge_data
+
+            total_len += best_edge_data.get("length", 0.0)
+            total_time += best_edge_data.get("travel_time", 0.0)
 
     return total_len, total_time
 
@@ -196,54 +276,62 @@ def nearest_neighbor_route(G, depot_node, stop_nodes):
     Very simple route optimizer:
     greedy nearest-neighbor heuristic using travel_time on the road network.
 
-    This is NOT an exact VRP solver, but it's enough to illustrate
-    routing optimization for your proof-of-concept.
+    Uses an undirected graph and ignores unreachable stops.
     """
+    Gu = G.to_undirected()
+
     unvisited = list(stop_nodes)
     route = [depot_node]
     current = depot_node
 
     while unvisited:
-        # choose next stop as the one with shortest path time from current
-        next_idx = min(
-            range(len(unvisited)),
-            key=lambda i: nx.shortest_path_length(
-                G, current, unvisited[i], weight="travel_time"
-            ),
-        )
-        current = unvisited.pop(next_idx)
+        best_time = float("inf")
+        best_idx = None
+
+        for i, node in enumerate(unvisited):
+            try:
+                t = nx.shortest_path_length(Gu, current, node, weight="travel_time")
+            except nx.NetworkXNoPath:
+                continue
+
+            if t < best_time:
+                best_time = t
+                best_idx = i
+
+        if best_idx is None or best_time == float("inf"):
+            break
+
+        current = unvisited.pop(best_idx)
         route.append(current)
 
-    # return to depot
     route.append(depot_node)
-
     return route
 
 
-def compare_routes_with_osm(coords_sample, city_name: str):
+def compare_routes_with_osm(coords_sample):
     """
-    Use OpenStreetMap to compare baseline vs optimized route distance/time:
-
-      1) Build road network for the city.
-      2) Map each delivery point to the nearest street node.
-      3) Baseline route: visit deliveries in the original order.
-      4) Optimized route: nearest-neighbor heuristic (shorter path).
+    Use OpenStreetMap to compare baseline vs optimized route distance/time
+    for deliveries in the densest region.
     """
     if coords_sample is None:
         raise ValueError("No coordinates available for routing.")
 
-    G = build_osm_graph(city_name)
+    # 1) Pick main region center from coords_sample
+    center_lat, center_lon = pick_main_region(coords_sample, precision=2)
 
-    # Nodes for the delivery points
+    # 2) Build road network around that center
+    G = build_osm_graph(center_lat, center_lon, dist=5000)
+
+    # 3) Nodes for the delivery points (drop locations)
     stop_nodes = coords_to_nodes(G, coords_sample)
 
-    # Define a 'depot' as the average restaurant location
-    dep_lat_col = "Restaurant_latitude"
-    dep_lon_col = "Restaurant_longitude"
+    # 4) Define a 'depot' as the average store location in this sample
+    dep_lat_col = "Store_Latitude"
+    dep_lon_col = "Store_Longitude"
 
     if dep_lat_col not in coords_sample.columns or dep_lon_col not in coords_sample.columns:
         raise KeyError(
-            "Restaurant latitude/longitude columns not found in coords_sample. "
+            "Store latitude/longitude columns not found in coords_sample. "
             "Update dep_lat_col/dep_lon_col to match your dataset."
         )
 
@@ -251,26 +339,48 @@ def compare_routes_with_osm(coords_sample, city_name: str):
     depot_lon = coords_sample[dep_lon_col].mean()
     depot_node = ox.distance.nearest_nodes(G, X=[depot_lon], Y=[depot_lat])[0]
 
-    # Baseline: depot -> stops in original order -> depot
-    baseline_route_nodes = [depot_node] + list(stop_nodes) + [depot_node]
+    # 5) Restrict stops to same connected component as depot
+    Gu = G.to_undirected()
+    reachable = nx.node_connected_component(Gu, depot_node)
+    filtered_stops = [n for n in stop_nodes if n in reachable]
+
+    if len(filtered_stops) == 0:
+        print("\n[OSM] No delivery stops in the same connected component as the depot.")
+        print("[OSM] Skipping route comparison.")
+        return None
+
+    # 6) Baseline: depot -> stops in original order -> depot
+    baseline_route_nodes = [depot_node] + list(filtered_stops) + [depot_node]
     baseline_dist, baseline_time = route_distance_and_time(G, baseline_route_nodes)
 
-    # Optimized: nearest-neighbor order
-    optimized_route_nodes = nearest_neighbor_route(G, depot_node, list(stop_nodes))
+    if baseline_dist == 0 or baseline_time == 0:
+        print("\n[OSM] Warning: no valid path segments accumulated for baseline route.")
+        print("[OSM] Route-time improvement cannot be computed for this sample.")
+        return None
+
+    # 7) Optimized: nearest-neighbor order
+    optimized_route_nodes = nearest_neighbor_route(G, depot_node, list(filtered_stops))
     optimized_dist, optimized_time = route_distance_and_time(G, optimized_route_nodes)
+
+    if optimized_dist == 0 or optimized_time == 0:
+        print("\n[OSM] Warning: no valid path segments accumulated for optimized route.")
+        print("[OSM] Route-time improvement cannot be computed for this sample.")
+        return None
 
     osm_results = {
         "baseline_km": baseline_dist / 1000,
         "optimized_km": optimized_dist / 1000,
         "baseline_minutes": baseline_time / 60,
         "optimized_minutes": optimized_time / 60,
+        "improvement_pct": (baseline_time - optimized_time) / baseline_time * 100,
     }
 
-    print("\n[OSM] Route comparison (using OpenStreetMap):")
+    print("\n[OSM] Route comparison (using OpenStreetMap, densest region):")
     print(f"  Baseline distance:  {osm_results['baseline_km']:.2f} km")
     print(f"  Optimized distance: {osm_results['optimized_km']:.2f} km")
     print(f"  Baseline time:      {osm_results['baseline_minutes']:.1f} minutes")
     print(f"  Optimized time:     {osm_results['optimized_minutes']:.1f} minutes")
+    print(f"  Time improvement:   {osm_results['improvement_pct']:.1f}%")
 
     return osm_results
 
@@ -280,31 +390,37 @@ def compare_routes_with_osm(coords_sample, city_name: str):
 # -----------------------------------------------------------
 def main():
     # 1. Train model on one area (your "city")
-    area = "Metropolitian"  # adjust to match Area value in your dataset
-    model, X_test, y_test, coords_test = train_model(area=area)
+    area = "Metropolitan"  # or "Urban", etc.
+    model, X_test, y_test, coords_test, baseline_mae, rf_mae = train_model(area=area)
 
-    # 2. Simulate 50 deliveries and compute time/fuel improvement
+    # 2. Compute improvement based on MAE reduction (main KPI)
+    mae_improvement_pct = (baseline_mae - rf_mae) / baseline_mae * 100
+    print("\n=== Model Performance Improvement (Prediction Quality) ===")
+    print(f"Baseline MAE: {baseline_mae:.2f} minutes")
+    print(f"RF MAE:       {rf_mae:.2f} minutes")
+    print(f"MAE improvement: {mae_improvement_pct:.1f}%")
+
+    # 3. Simulate 50 deliveries and compute time/fuel improvement
     results = simulate_50_deliveries(model, X_test, y_test, coords_test, random_state=1)
 
-    # 3. Print summary + 15% success check
-    print("\n=== Simulation Results (50 Deliveries) ===")
-    print(f"Baseline avg time:  {results['baseline_avg_time']:.2f} minutes")
-    print(f"Optimized avg time: {results['optimized_avg_time']:.2f} minutes")
-    print(f"Improvement:        {results['improvement_pct']:.1f}%")
+    print("\n=== Simulation Results (50 Deliveries, Mean Times) ===")
+    print(f"Baseline avg time (actual):  {results['baseline_avg_time']:.2f} minutes")
+    print(f"Optimized avg time (pred):   {results['optimized_avg_time']:.2f} minutes")
+    print(f"Time-based 'improvement':    {results['improvement_pct']:.1f}% "
+          "(mean(actual) vs mean(predicted) — mainly diagnostic)")
 
-    if results["improvement_pct"] >= 15:
-        print("Success: target of 15% improvement achieved.")
-    else:
-        print("Target not reached yet. Consider tuning the model (features, model, hyperparameters).")
-
-    # 4. Show dashboard
+    # 4. Show dashboard for the 50 deliveries
     plot_dashboard(results)
 
-    # 5. Use OpenStreetMap to illustrate route optimization based on lat/lon
+    # 5. Route optimization using OSM, based on the same 50 deliveries
     if results["coords_sample"] is not None:
-        # Use a city that matches your data (change this to a realistic city)
-        city_name = "Bangalore, India"
-        compare_routes_with_osm(results["coords_sample"], city_name=city_name)
+        try:
+            osm_results = compare_routes_with_osm(results["coords_sample"])
+            if osm_results is None:
+                print("\n[OSM] Route comparison not available for this sample.")
+        except Exception as e:
+            print("\n[OSM] Routing failed:", repr(e))
+            print("[OSM] This part depends on osmnx, network access, and valid coordinates.")
     else:
         print("\n[OSM] Skipping routing: no latitude/longitude columns found.")
 

@@ -10,7 +10,6 @@ DATA_DIR = Path("data")
 CSV_NAME = "amazon_delivery_dataset.csv"
 DATA_PATH = DATA_DIR / CSV_NAME
 
-
 # -----------------------------------------------------------
 # Download dataset using kagglehub
 # -----------------------------------------------------------
@@ -47,7 +46,7 @@ def download_with_kagglehub() -> Path:
 
 
 # -----------------------------------------------------------
-# Loading and feature engineering
+# Loading
 # -----------------------------------------------------------
 def load_raw_data(path: Path = DATA_PATH) -> pd.DataFrame:
     """
@@ -61,13 +60,133 @@ def load_raw_data(path: Path = DATA_PATH) -> pd.DataFrame:
     return df
 
 
-def build_features(df: pd.DataFrame):
+# -----------------------------------------------------------
+# Coordinate cleaning + City feature
+# -----------------------------------------------------------
+def clean_coords_and_add_city(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop rows with invalid coordinates (0.0 or NaN) and create a
+    new categorical feature 'City' based on store coordinates,
+    using reverse geocoding when possible.
+
+    If reverse geocoding fails or geopy is not installed, falls back
+    to a coarse string based on rounded coordinates.
+    """
+    df = df.copy()
+
+    lat_store = "Store_Latitude"
+    lon_store = "Store_Longitude"
+    lat_drop = "Drop_Latitude"
+    lon_drop = "Drop_Longitude"
+
+    coord_cols = [lat_store, lon_store, lat_drop, lon_drop]
+    if not all(c in df.columns for c in coord_cols):
+        print(
+            "[clean_coords_and_add_city] Coordinate columns missing; "
+            "skipping coordinate cleaning and City creation."
+        )
+        return df
+
+    # 1) Drop invalid (NaN or 0.0) store/drop coordinates
+    mask_valid = (
+        df[lat_store].notna()
+        & df[lon_store].notna()
+        & df[lat_drop].notna()
+        & df[lon_drop].notna()
+        & (df[lat_store] != 0.0)
+        & (df[lon_store] != 0.0)
+        & (df[lat_drop] != 0.0)
+        & (df[lon_drop] != 0.0)
+    )
+
+    before = len(df)
+    df = df[mask_valid].copy()
+    after = len(df)
+    print(
+        f"[clean_coords_and_add_city] Dropped {before - after} rows "
+        f"with invalid (0.0/NaN) coordinates; remaining: {after}"
+    )
+
+    # 2) Try to assign City by reverse geocoding unique rounded store coords
+    try:
+        from geopy.geocoders import Nominatim
+    except ImportError:
+        print(
+            "[clean_coords_and_add_city] geopy not installed; "
+            "using coarse coordinate-based labels for City."
+        )
+        lat_round = df[lat_store].round(2)
+        lon_round = df[lon_store].round(2)
+        df["City"] = (
+            "Cell_" + lat_round.astype(str).str.cat(lon_round.astype(str), sep="_")
+        )
+        return df
+
+    geolocator = Nominatim(user_agent="last_mile_city_geocoder")
+
+    # Round to group nearby stores; this reduces number of API calls
+    lat_round = df[lat_store].round(2)
+    lon_round = df[lon_store].round(2)
+    df["_coord_key"] = list(zip(lat_round, lon_round))
+
+    unique_keys = df["_coord_key"].unique()
+    city_map: dict[tuple[float, float], str] = {}
+
+    print(
+        f"[clean_coords_and_add_city] Reverse geocoding {len(unique_keys)} "
+        "unique coordinate cells (rounded to 2 decimals)..."
+    )
+
+    for (lat_r, lon_r) in unique_keys:
+        try:
+            location = geolocator.reverse((lat_r, lon_r), language="en", timeout=10)
+        except Exception:
+            city_map[(lat_r, lon_r)] = "Unknown"
+            continue
+
+        if location is None or not hasattr(location, "raw"):
+            city_map[(lat_r, lon_r)] = "Unknown"
+            continue
+
+        addr = location.raw.get("address", {})
+        city = (
+            addr.get("city")
+            or addr.get("town")
+            or addr.get("village")
+            or addr.get("suburb")
+            or addr.get("county")
+            or addr.get("state")
+            or addr.get("country")
+        )
+
+        if city:
+            city_map[(lat_r, lon_r)] = city
+        else:
+            # Fallback: use a cell-based label instead of plain "Unknown"
+            cell_label = f"Cell_{lat_r:.2f}_{lon_r:.2f}"
+            city_map[(lat_r, lon_r)] = cell_label
+
+    # Map back to full DataFrame
+    df["City"] = df["_coord_key"].map(city_map).fillna("Unknown")
+    df = df.drop(columns=["_coord_key"])
+
+    return df
+
+# -----------------------------------------------------------
+# Feature engineering
+# -----------------------------------------------------------
+def build_features(df: pd.DataFrame, assume_clean: bool = False):
     """
     Turn the raw DataFrame into:
       - X : feature matrix
       - y : target (delivery time)
       - coords : latitude/longitude columns for routing
+
+    If assume_clean is False, coordinates are cleaned and City is added here.
     """
+    if not assume_clean:
+        df = clean_coords_and_add_city(df)
+
     df = df.copy()
 
     # -------- 1. Target variable ---------------------------------
@@ -85,15 +204,17 @@ def build_features(df: pd.DataFrame):
     numeric_cols = [
         "Agent_Age",
         "Agent_Rating",
-        "Distance",      # example, adjust to actual name
+        "Distance",      # adjust to actual name if needed
     ]
 
+    # We keep Area for filtering but do NOT use it as a feature here;
+    # instead we use City derived from coordinates.
     categorical_cols = [
         "Weather",
         "Traffic",
         "Vehicle",
-        "Area",
         "Category",
+        "City",
     ]
 
     numeric_cols = [c for c in numeric_cols if c in df.columns]
@@ -127,13 +248,14 @@ def build_features(df: pd.DataFrame):
     hour_cols = [c for c in ["Order_Hour", "Pickup_Hour"] if c in df.columns]
 
     # -------- 5. Latitude / longitude features -------------------
+    # Kaggle columns: Store_Latitude / Store_Longitude / Drop_Latitude / Drop_Longitude
     latlon_cols = [
         c
         for c in [
-            "Restaurant_latitude",
-            "Restaurant_longitude",
-            "Delivery_location_latitude",
-            "Delivery_location_longitude",
+            "Store_Latitude",
+            "Store_Longitude",
+            "Drop_Latitude",
+            "Drop_Longitude",
         ]
         if c in df.columns
     ]
@@ -159,7 +281,7 @@ def build_features(df: pd.DataFrame):
 # Train/test split helper
 # -----------------------------------------------------------
 def get_train_test_data(
-    test_size: float = 0.3,  # 70% train / 30% test if you want
+    test_size: float = 0.3,  # 70% train / 30% test
     random_state: int = 42,
     area_filter: Optional[str] = None,
 ):
@@ -176,7 +298,7 @@ def get_train_test_data(
     if "Area" in df.columns:
         df["Area"] = df["Area"].astype(str).str.strip()
 
-    # Optional: filter by area
+    # Optional: filter by Area (text column), independent of City
     if area_filter is not None and "Area" in df.columns:
         df_area = df[df["Area"] == area_filter].copy()
         print(
@@ -192,8 +314,8 @@ def get_train_test_data(
         else:
             df = df_area
 
-    # Build features
-    X, y, coords = build_features(df)
+    # Build features (includes coord cleaning and City)
+    X, y, coords = build_features(df, assume_clean=False)
     print(f"[get_train_test_data] Rows after build_features: {len(X)}")
 
     if len(X) == 0:
@@ -222,9 +344,10 @@ def get_train_test_data(
 
     return X_train, X_test, y_train, y_test, coords_train, coords_test
 
+
 # -----------------------------------------------------------
 if __name__ == "__main__":
-    print("[__main__] Running dataset.py for a quick data check")
+    print("[__main__] Running Dataset.py for a quick data check")
 
     # 1. Load raw data (downloads automatically if missing)
     df_raw = load_raw_data()
@@ -233,8 +356,15 @@ if __name__ == "__main__":
     print("\n[__main__] Raw data (first 5 rows):")
     print(df_raw.head())
 
-    # 2. Build features and inspect heads
-    X, y, coords = build_features(df_raw)
+    # 2. Clean coordinates, add City, and inspect top cities
+    df_city = clean_coords_and_add_city(df_raw)
+
+    if "City" in df_city.columns:
+        print("\n[__main__] Top 5 cities (from coordinates):")
+        print(df_city["City"].value_counts().head(5))
+
+    # 3. Build features and inspect heads
+    X, y, coords = build_features(df_city, assume_clean=True)
     print(f"\n[__main__] Feature matrix X shape: {X.shape}")
     print(f"[__main__] Target y shape: {y.shape}")
     print("\n[__main__] Feature matrix X (first 5 rows):")
@@ -247,7 +377,7 @@ if __name__ == "__main__":
         print("[__main__] Coords (first 5 rows):")
         print(coords.head())
 
-    # 3. Scan for missing values in processed data
+    # 4. Scan for missing values in processed data
     print("\n[__main__] Missing values in processed feature matrix X:")
     print(X.isnull().sum()[X.isnull().sum() > 0])  # only show columns with missing
 
@@ -255,7 +385,7 @@ if __name__ == "__main__":
         print("\n[__main__] Missing values in coords dataframe:")
         print(coords.isnull().sum()[coords.isnull().sum() > 0])
 
-    # 4. Train/test split and inspect training data
+    # 5. Train/test split and inspect training data
     (
         X_train,
         X_test,
@@ -269,7 +399,6 @@ if __name__ == "__main__":
     print(f"[__main__] X_test shape:  {X_test.shape}")
     print(f"[__main__] y_train shape: {y_train.shape}")
     print(f"[__main__] y_test shape:  {y_test.shape}")
-
     print("\n[__main__] X_train (first 5 rows):")
     print(X_train.head())
     print("\n[__main__] y_train (first 5 values):")
