@@ -1,0 +1,10 @@
+.idea/
+__pycache__/
+venv/
+.venv/
+cache/
+data/
+*.csv
+kaggle.json
+.DS_Store
+!requirements.txt
